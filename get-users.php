@@ -4,8 +4,8 @@ ini_set('memory_limit', '1024M');
 error_reporting(E_ALL | E_STRICT);
 ini_set('display_errors', 1);
 date_default_timezone_set('America/Los_Angeles'); //make sure to set the expected timezone
-require '/home/ubuntu/export-users-report/vendor/autoload.php';
-require '/home/ubuntu/export-users-report/config.php';
+require './vendor/autoload.php';
+require './config.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
@@ -26,13 +26,12 @@ use Kaltura\Client\Type\{FilterPager, UserFilter};
 
 class GetUsersUtil implements ILogger
 {
-	const PARENT_PARTNER_IDS = array();
 	const SERVICE_URL = 'https://cdnapisec.kaltura.com'; //The base URL to the Kaltura server API endpoint
 	const KS_EXPIRY_TIME = 86000; // Kaltura session length. Please note the script may run for a while so it mustn't be too short.
 	const DEBUG_PRINTS = true; //Set to true if you'd like the script to output logging to the console (this is different from the KalturaLogger)
 	const CYCLE_SIZES = 400; // Determines how many entries will be processed in each multi-request call - set it to whatever number works best for your server.
-	const ERROR_LOG_FILE = '/home/ubuntu/export-users-report/kaltura_logger.log'; //The name of the KalturaLogger export file
-	const SHOULD_LOG = false;
+	const ERROR_LOG_FILE = './kaltura_logger.log'; //The name of the KalturaLogger export file
+	const SHOULD_LOG = false; //if true will log all Kaltura calls into ERROR_LOG_FILE
 
 	private $excelColumnHeaderFormats = array(
 		'id' => ['prettyName' => 'User ID', 'defaultVal' => '', 'excelFormat' => ''],
@@ -139,7 +138,7 @@ class GetUsersUtil implements ILogger
 		}
 
 		$date = date("MdY-HiT");
-		$xslxfile = '/home/ubuntu/export-users-report/user-profiles-' . $pid . '.xlsx';
+		$xslxfile = './user-profiles-' . $pid . '.xlsx';
 		$this->writeXLSX($xslxfile, $data, $excelColumnHeader, $excelFieldFormats);
 		echo 'Successfully exported data!' . PHP_EOL;
 		echo 'File name: ' . $xslxfile . PHP_EOL;
