@@ -1,0 +1,11 @@
+<?php
+const PARENT_PARTNER_IDS = array(
+    0000000 => 'api-admin-secret-key', //get this from https://kmc.kaltura.com/index.php/kmcng/settings/integrationSettings
+    1111111 => 'api-admin-secret-key'
+);
+const EMAIL_SENDER = 'no-reply@company.com';
+const EMAIL_RECIPIENTS = 'person1@mail.com;person2@mail.com';
+const SMTP_USERNAME = 'your_smtp_user_name';
+const SMTP_PASSWORD = 'your_smtp_password';
+const SHOULD_SEND_EMAIL_ATTACHMENTS = false;
+const REPORT_BASE_URL = 'https://urltodownloadfrom/?id=';
