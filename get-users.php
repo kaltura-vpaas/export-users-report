@@ -48,6 +48,10 @@ class GetUsersUtil implements ILogger
 	const ERROR_LOG_FILE = './kaltura_logger.log'; //The name of the KalturaLogger export file
 	const SHOULD_LOG = false;
 	const KMS_USERS_METADATA_PROFILE_ID = 00000; //the id for KMS_USERSCHEMA1_mediaspace (mediaspace being the instance id of the KMS)
+	const USER_STATUS_PRE_REGISTERED = 'Pre-registered';
+        const USER_STATUS_REGISTERED = 'Registered';
+        const USER_STATUS_UN_REGISTERED = 'Un-registered';
+        const USER_STATUS_ATTENDED = 'Attended';
 
 	private $excelColumnHeaderFormats = array(
 		'id' => ['prettyName' => 'User ID', 'defaultVal' => '', 'excelFormat' => ''],
@@ -151,11 +155,11 @@ class GetUsersUtil implements ILogger
                             user status = active should only be in users in attendanceInfo registered or attended.
                             */
                             $realregstatus = '';
-                            if ($user->status == UserStatus::BLOCKED && $userAttendance->status == KalturaApiUtils::USER_STATUS_PRE_REGISTERED) {
+                            if ($user->status == UserStatus::BLOCKED && $userAttendance->status == self::USER_STATUS_PRE_REGISTERED) {
                                 $realregstatus = 'Waiting Email Verification';
-                            } elseif ($user->status == UserStatus::BLOCKED && $userAttendance->status == KalturaApiUtils::USER_STATUS_UN_REGISTERED) {
+                            } elseif ($user->status == UserStatus::BLOCKED && $userAttendance->status == self::USER_STATUS_UN_REGISTERED) {
                                 $realregstatus = 'Un-Registered User';
-                            } elseif ($user->status == UserStatus::BLOCKED && $userAttendance->status == KalturaApiUtils::USER_STATUS_REGISTERED) {
+                            } elseif ($user->status == UserStatus::BLOCKED && $userAttendance->status == self::USER_STATUS_REGISTERED) {
                                 $realregstatus = 'User Blocked by Admin';
                             } else {
                                 $realregstatus = $userAttendance->status;
