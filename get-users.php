@@ -1,6 +1,6 @@
 <?php
 set_time_limit(0);
-ini_set('memory_limit', '1024M');
+ini_set('memory_limit', '5120M');
 error_reporting(E_ALL | E_STRICT);
 ini_set('display_errors', 1);
 date_default_timezone_set('America/Los_Angeles'); //make sure to set the expected timezone
@@ -23,15 +23,31 @@ use Kaltura\Client\Client as KalturaClient;
 use Kaltura\Client\ILogger;
 use Kaltura\Client\Enum\{SessionType, UserStatus, UserType};
 use Kaltura\Client\Type\{FilterPager, UserFilter};
+use Kaltura\Client\Plugin\ElasticSearch\ElasticSearchPlugin;
+use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchItemType;
+use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchOperatorType;
+use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchSortOrder;
+use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchUserFieldName;
+use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchUserOrderByFieldName;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchOrderBy;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchRange;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserItem;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserMetadataItem;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserOperator;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserOrderByItem;
+use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserParams;
+use Kaltura\Client\Type\Pager;
 
 class GetUsersUtil implements ILogger
 {
+	const PARENT_PARTNER_IDS = array();
 	const SERVICE_URL = 'https://cdnapisec.kaltura.com'; //The base URL to the Kaltura server API endpoint
 	const KS_EXPIRY_TIME = 86000; // Kaltura session length. Please note the script may run for a while so it mustn't be too short.
 	const DEBUG_PRINTS = true; //Set to true if you'd like the script to output logging to the console (this is different from the KalturaLogger)
-	const CYCLE_SIZES = 400; // Determines how many entries will be processed in each multi-request call - set it to whatever number works best for your server.
+	const CYCLE_SIZES = 300; // Determines how many entries will be processed in each multi-request call - set it to whatever number works best for your server.
 	const ERROR_LOG_FILE = './kaltura_logger.log'; //The name of the KalturaLogger export file
-	const SHOULD_LOG = false; //if true will log all Kaltura calls into ERROR_LOG_FILE
+	const SHOULD_LOG = false;
+	const KMS_USERS_METADATA_PROFILE_ID = 00000; //the id for KMS_USERSCHEMA1_mediaspace (mediaspace being the instance id of the KMS)
 
 	private $excelColumnHeaderFormats = array(
 		'id' => ['prettyName' => 'User ID', 'defaultVal' => '', 'excelFormat' => ''],
@@ -54,10 +70,11 @@ class GetUsersUtil implements ILogger
 		'status' => ['prettyName' => 'Registration Status', 'defaultVal' => '', 'excelFormat' => ''],
 		'statusUpdateTime' => ['prettyName' => 'Registration Status Update', 'defaultVal' => '', 'excelFormat' => '[$-en-US]m/d/yy h:mm AM/PM;@', 'fieldType' => 'date'],
 		'createdAt' => ['prettyName' => 'Created At', 'defaultVal' => '', 'excelFormat' => '[$-en-US]m/d/yy h:mm AM/PM;@', 'fieldType' => 'date'],
-		'updatedAt' => ['prettyName' => 'Last Updated At', 'defaultVal' => '', 'excelFormat' => '[$-en-US]m/d/yy h:mm AM/PM;@', 'fieldType' => 'date']
+		'updatedAt' => ['prettyName' => 'Last Updated At', 'defaultVal' => '', 'excelFormat' => '[$-en-US]m/d/yy h:mm AM/PM;@', 'fieldType' => 'date'],
+		'realregstatus' => ['prettyName' => 'Detailed Registration Status', 'defaultVal' => '', 'excelFormat' => '']
 	);
 
-	public function run($pid, $secret, $emailSender, $emailRecipients, $usernameSmtp, $passwordSmtp, $addEmailAttachment, $reportDlBaseUrl)
+	public function run($pid, $secret, $emailSender, $emailRecipients, $usernameSmtp, $passwordSmtp, $addEmailAttachment, $reportDlBaseUrl, $emailRecipients2)
 	{
 		$excelFieldFormats = array();
 		$excelColumnHeader = array();
@@ -80,70 +97,130 @@ class GetUsersUtil implements ILogger
 		$this->client = new KalturaClient($kConfig);
 		$this->ks = $this->client->session->start($secret, 'users-xls-export', SessionType::ADMIN, $pid, GetUsersUtil::KS_EXPIRY_TIME, 'list:*,disableentitlement,*');
 		$this->client->setKs($this->ks);
+		$elasticSearchPlugin = ElasticSearchPlugin::get($this->client);
 
-		$users = array();
-		$pager = new FilterPager();
-		$pager->pageSize = GetUsersUtil::CYCLE_SIZES;
-		$pager->pageIndex = 1;
-		$filter = new UserFilter();
-		$filter->statusEqual = UserStatus::ACTIVE;
-		$filter->isAdminEqual = false;
-		$filter->typeEqual = UserType::USER;
-		$filter->loginEnabledEqual = true;
+                $userRoleMetadataProfileId = GetUsersUtil::KMS_USERS_METADATA_PROFILE_ID;
 
-		$usersList = $this->getFullListOfKalturaObject($filter, $this->client->getUserService(), 'id', null, true);
-		foreach ($usersList as $userId => $user) {
-			if (isset($user->registrationInfo) && $user->registrationInfo != null && $user->registrationInfo != '') {
-				$userProfile = json_decode($user->registrationInfo);
-				$userAttendance = json_decode($user->attendanceInfo);
-				foreach ($this->excelColumnHeaderFormats as $columnName => $columnSettings) {
-					if (isset($user->{$columnName}) && $columnName != 'status') { //take status from registrationInfo instead of user status
-						if (!isset($users[$userId]) || $users[$userId] == null)
-							$users[$userId] = array();
-						$users[$userId][$columnName] = $user->{$columnName};
-					} elseif (isset($userProfile->{$columnName})) {
-						if (!isset($users[$userId]) || $users[$userId] == null)
-							$users[$userId] = array();
-						$fvalue = $userProfile->{$columnName};
-						if (is_array($fvalue)) {
-							$fvalue = implode(',', $fvalue);
-						}
-						$users[$userId][$columnName] = $fvalue;
-					} elseif (isset($userAttendance->{$columnName})) {
-						if (!isset($users[$userId]) || $users[$userId] == null)
-							$users[$userId] = array();
-						$fvalue = $userAttendance->{$columnName};
-						if (is_array($fvalue)) {
-							$fvalue = implode(',', $fvalue);
-						}
-						$users[$userId][$columnName] = $fvalue;
-					} else {
-						$users[$userId][$columnName] = $columnSettings['defaultVal'];
-					}
-					if (isset($columnSettings['fieldType']) && $columnSettings['fieldType'] == 'date' && $users[$userId][$columnName] != '')
-						$users[$userId][$columnName] = $this->convertTimestamp2Excel($users[$userId][$columnName]);
-				}
-			} else {
-				echo 'skipped user for lack of profile: ' . $userId . PHP_EOL;
-			}
-		}
+                $foundUsers = array();
+                $lastCreatedAt = -1;
+                $searchParams = new ESearchUserParams();
+                $searchParams->searchOperator = new ESearchUserOperator();
+                $searchParams->searchOperator->operator = ESearchOperatorType::AND_OP;
+                $searchParams->searchOperator->searchItems = array();
+                $eSerachMetadataItem = new ESearchUserMetadataItem();
+                $eSerachMetadataItem->metadataProfileId = $userRoleMetadataProfileId;
+                $eSerachMetadataItem->itemType = ESearchItemType::EXISTS;
+                $eSerachMetadataItem->xpath = "/*[local-name()='metadata']/*[local-name()='role']";
+                $eSerachMetadataItem->addHighlight = false;
+                $searchParams->searchOperator->searchItems[0] = $eSerachMetadataItem;
+                $eSerachUserItem = new ESearchUserItem();
+                $eSerachUserItem->fieldName = ESearchUserFieldName::TYPE;
+                $eSerachUserItem->addHighlight = false;
+                $eSerachUserItem->itemType = ESearchItemType::EXACT_MATCH;
+                $eSerachUserItem->searchTerm = UserType::USER;
+                $searchParams->searchOperator->searchItems[1] = $eSerachMetadataItem;
+                $eSerachUserCreatedAtItem = new ESearchUserItem();
+                $eSerachUserCreatedAtItem->fieldName = ESearchUserFieldName::CREATED_AT;
+                $eSerachUserCreatedAtItem->itemType = ESearchItemType::RANGE;
+                $eSerachUserCreatedAtItem->range = new ESearchRange();
+                $eSerachUserCreatedAtItem->range->greaterThan = $lastCreatedAt;
+                $searchParams->searchOperator->searchItems[2] = $eSerachUserCreatedAtItem;
+                $searchParams->orderBy = new ESearchOrderBy();
+                $searchParams->orderBy->orderItems = array();
+                $eSearchOrderItem = new ESearchUserOrderByItem();
+                $eSearchOrderItem->sortField = ESearchUserOrderByFieldName::CREATED_AT;
+                $eSearchOrderItem->sortOrder = ESearchSortOrder::ORDER_BY_ASC;
+                array_push($searchParams->orderBy->orderItems, $eSearchOrderItem);
+                $pager = new Pager();
+                $pager->pageSize = 500;
+                $pager->pageIndex = 1;
+                $searchResults = $elasticSearchPlugin->eSearch->searchUser($searchParams, $pager);
+                while ($searchResults->totalCount > 0) {
+                    foreach ($searchResults->objects as $searchResult) {
+                        $user = $searchResult->object;
+                        $userId = $user->id;
+                        $hasRegInfo = isset($user->registrationInfo) && $user->registrationInfo != null && $user->registrationInfo != '';
+                        $userProfile = $hasRegInfo ? json_decode($user->registrationInfo) : null;
+                        $hasAttInfo = isset($user->attendanceInfo) && $user->attendanceInfo != null && $user->attendanceInfo != '';
+                        $userAttendance = $hasAttInfo ? json_decode($user->attendanceInfo) : null;
+                        if ($userAttendance != null) {
+                            /*
+                            user.status = blocked + attendanceInfo = preRegistered => unconfirmed user
+                            user.status = blocked + attendanceInfo = unregistered => user unregistered
+                            user.status = blocked + attendanceInfo = registered => user blocked by admin
+                            user status = active should only be in users in attendanceInfo registered or attended.
+                            */
+                            $realregstatus = '';
+                            if ($user->status == UserStatus::BLOCKED && $userAttendance->status == KalturaApiUtils::USER_STATUS_PRE_REGISTERED) {
+                                $realregstatus = 'Waiting Email Verification';
+                            } elseif ($user->status == UserStatus::BLOCKED && $userAttendance->status == KalturaApiUtils::USER_STATUS_UN_REGISTERED) {
+                                $realregstatus = 'Un-Registered User';
+                            } elseif ($user->status == UserStatus::BLOCKED && $userAttendance->status == KalturaApiUtils::USER_STATUS_REGISTERED) {
+                                $realregstatus = 'User Blocked by Admin';
+                            } else {
+                                $realregstatus = $userAttendance->status;
+                            }
+                            // only add to the report if the user was not deleted
+                            if ($realregstatus != 'Un-Registered User' && $realregstatus != 'User Blocked by Admin') {
+                                if (!isset($foundUsers[$userId]) || $foundUsers[$userId] == null) {
+				    $foundUsers[$userId] = array();
+				    $foundUsers[$userId]['realregstatus'] = $realregstatus;
+                                } else {
+                                    continue;
+                                }
+                                foreach ($this->excelColumnHeaderFormats as $columnName => $columnSettings) {
+                                    if (isset($user->{$columnName}) && $columnName != 'status') { //take status from registrationInfo instead of user status
+                                        $foundUsers[$userId][$columnName] = $user->{$columnName};
+                                    } elseif (isset($userProfile->{$columnName})) {
+                                        $fvalue = $userProfile->{$columnName};
+                                        if (is_array($fvalue)) {
+                                            $fvalue = implode(',', $fvalue);
+                                        }
+                                        $foundUsers[$userId][$columnName] = $fvalue;
+                                    } elseif (isset($userAttendance->{$columnName})) {
+                                        $fvalue = $userAttendance->{$columnName};
+                                        if (is_array($fvalue)) {
+                                            $fvalue = implode(',', $fvalue);
+                                        }
+                                        $foundUsers[$userId][$columnName] = $fvalue;
+                                    } else {
+                                        $foundUsers[$userId][$columnName] = $columnSettings['defaultVal'];
+                                    }
+                                    if (isset($columnSettings['fieldType']) && $columnSettings['fieldType'] == 'date' && $foundUsers[$userId][$columnName] != '') {
+                                        $foundUsers[$userId][$columnName] = $this->convertTimestamp2Excel($foundUsers[$userId][$columnName]);
+                                    }
+                                }
+                                print "user: {$user->id}, {$user->email}, status: {$realregstatus}\n";
+                            }
+                        }
+                        $lastCreatedAt = $user->createdAt;
+                    }
+                    $searchParams->searchOperator->searchItems[2]->range->greaterThan = $lastCreatedAt;
+                    usleep(500000);
+                    $searchResults = $elasticSearchPlugin->eSearch->searchUser($searchParams, $pager);
+                    //KalturaApiUtils::presistantApiRequest($this, $elasticSearchPlugin->eSearch, 'searchUser', array($searchParams, $pager), 5);
+                }
+                $totalRegisteredUsers = count($foundUsers);
+                print "found total {$totalRegisteredUsers} users.\n";
 
-		$data = array();
-		foreach ($users as $user_id => $user) {
-			$row = array();
-			foreach ($user as $userprofile_field => $userprofile_value) {
-				$row[] = $userprofile_value;
-			}
-			array_push($data, $row);
-		}
+                $data = array();
+                foreach ($foundUsers as $user_id => $user) {
+                    $row = array();
+                    foreach ($user as $userprofile_field => $userprofile_value) {
+                        $row[] = $userprofile_value;
+                    }
+                    array_push($data, $row);
+                }
 
 		$date = date("MdY-HiT");
-		$xslxfile = './user-profiles-' . $pid . '.xlsx';
+		$xslxfile = '/home/ubuntu/export-users-report/user-profiles-' . $pid . '.xlsx';
 		$this->writeXLSX($xslxfile, $data, $excelColumnHeader, $excelFieldFormats);
+
 		echo 'Successfully exported data!' . PHP_EOL;
 		echo 'File name: ' . $xslxfile . PHP_EOL;
 		$filepath = $addEmailAttachment ? $xslxfile : null;
 		$this->sendSESmail($pid, $date, $filepath, $emailSender, $emailRecipients, $usernameSmtp, $passwordSmtp, $reportDlBaseUrl);
+		$this->sendSESmail($pid, $date, $filepath, $emailSender, $emailRecipients2, $usernameSmtp, $passwordSmtp, $reportDlBaseUrl);
 	}
 	
 	private function sendSESmail ($pid, $date, $filepath, $emailSender, $emailRecipients, $usernameSmtp, $passwordSmtp, $reportDlBaseUrl) {
@@ -223,7 +300,7 @@ class GetUsersUtil implements ILogger
 
 		// autosize all columns to content width
 		for ($i = 'A'; $i <= $last_column; $i++) {
-			$doc->getActiveSheet()->getColumnDimension($i)->setAutoSize(true);
+			$doc->getActiveSheet()->getColumnDimension($i)->setAutoSize(false);
 		}
 
 		// if $keys, freeze the header row and make it bold
@@ -326,6 +403,7 @@ class GetUsersUtil implements ILogger
 		}
 		// if this filter doesn't have idNotIn - we need to find the highest totalCount
 		// this is a workaround hack due to a bug in how categoryEntry list action calculates totalCount
+		/*
 		if (!property_exists($filter, 'idNotIn')) {
 			$temppager = new FilterPager();
 			$temppager->pageSize = GetUsersUtil::CYCLE_SIZES;
@@ -336,7 +414,7 @@ class GetUsersUtil implements ILogger
 				++$temppager->pageIndex;
 				$result = $this->presistantApiRequest($listService, 'listAction', array($filter, $temppager), 5);
 			}
-		}
+		}*/
 		$totalObjects2Get = $totalCount;
 		while (!$reachedLastObject) {
 			if ($lastCreatedAt != 0) {
@@ -488,7 +566,7 @@ $executionTime->start();
 exec("rm -f user-profiles-3*");
 foreach (PARENT_PARTNER_IDS as $pid => $secret) {
 	$instance = new GetUsersUtil();
-	$instance->run($pid, $secret, EMAIL_SENDER, EMAIL_RECIPIENTS, SMTP_USERNAME, SMTP_PASSWORD, SHOULD_SEND_EMAIL_ATTACHMENTS, REPORT_BASE_URL);
+	$instance->run($pid, $secret, EMAIL_SENDER, EMAIL_RECIPIENTS1, SMTP_USERNAME, SMTP_PASSWORD, SHOULD_SEND_EMAIL_ATTACHMENTS, REPORT_BASE_URL, EMAIL_RECIPIENTS2);
 	unset($instance);
 }
 $executionTime->end();
