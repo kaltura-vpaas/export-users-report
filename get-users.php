@@ -20,23 +20,16 @@ use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
 use Kaltura\Client\Configuration as KalturaConfiguration;
 use Kaltura\Client\Client as KalturaClient;
+use Kaltura\Client\Enum\NullableBoolean;
+use Kaltura\Client\Enum\SearchOperatorType;
 use Kaltura\Client\ILogger;
-use Kaltura\Client\Enum\{SessionType, UserStatus, UserType};
-use Kaltura\Client\Type\{FilterPager, UserFilter};
-use Kaltura\Client\Plugin\ElasticSearch\ElasticSearchPlugin;
-use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchItemType;
-use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchOperatorType;
-use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchSortOrder;
-use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchUserFieldName;
-use Kaltura\Client\Plugin\ElasticSearch\Enum\ESearchUserOrderByFieldName;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchOrderBy;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchRange;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserItem;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserMetadataItem;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserOperator;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserOrderByItem;
-use Kaltura\Client\Plugin\ElasticSearch\Type\ESearchUserParams;
-use Kaltura\Client\Type\Pager;
+use Kaltura\Client\Enum\SessionType;
+use Kaltura\Client\Enum\UserOrderBy;
+use Kaltura\Client\Enum\UserStatus;
+use Kaltura\Client\Plugin\Metadata\Type\MetadataSearchItem;
+use Kaltura\Client\Type\FilterPager;
+use Kaltura\Client\Type\SearchCondition;
+use Kaltura\Client\Type\UserFilter;
 
 class GetUsersUtil implements ILogger
 {
@@ -106,42 +99,27 @@ class GetUsersUtil implements ILogger
                 $userRoleMetadataProfileId = GetUsersUtil::KMS_USERS_METADATA_PROFILE_ID;
 
                 $foundUsers = array();
-                $lastCreatedAt = -1;
-                $searchParams = new ESearchUserParams();
-                $searchParams->searchOperator = new ESearchUserOperator();
-                $searchParams->searchOperator->operator = ESearchOperatorType::AND_OP;
-                $searchParams->searchOperator->searchItems = array();
-                $eSerachMetadataItem = new ESearchUserMetadataItem();
-                $eSerachMetadataItem->metadataProfileId = $userRoleMetadataProfileId;
-                $eSerachMetadataItem->itemType = ESearchItemType::EXISTS;
-                $eSerachMetadataItem->xpath = "/*[local-name()='metadata']/*[local-name()='role']";
-                $eSerachMetadataItem->addHighlight = false;
-                $searchParams->searchOperator->searchItems[0] = $eSerachMetadataItem;
-                $eSerachUserItem = new ESearchUserItem();
-                $eSerachUserItem->fieldName = ESearchUserFieldName::TYPE;
-                $eSerachUserItem->addHighlight = false;
-                $eSerachUserItem->itemType = ESearchItemType::EXACT_MATCH;
-                $eSerachUserItem->searchTerm = UserType::USER;
-                $searchParams->searchOperator->searchItems[1] = $eSerachMetadataItem;
-                $eSerachUserCreatedAtItem = new ESearchUserItem();
-                $eSerachUserCreatedAtItem->fieldName = ESearchUserFieldName::CREATED_AT;
-                $eSerachUserCreatedAtItem->itemType = ESearchItemType::RANGE;
-                $eSerachUserCreatedAtItem->range = new ESearchRange();
-                $eSerachUserCreatedAtItem->range->greaterThan = $lastCreatedAt;
-                $searchParams->searchOperator->searchItems[2] = $eSerachUserCreatedAtItem;
-                $searchParams->orderBy = new ESearchOrderBy();
-                $searchParams->orderBy->orderItems = array();
-                $eSearchOrderItem = new ESearchUserOrderByItem();
-                $eSearchOrderItem->sortField = ESearchUserOrderByFieldName::CREATED_AT;
-                $eSearchOrderItem->sortOrder = ESearchSortOrder::ORDER_BY_ASC;
-                array_push($searchParams->orderBy->orderItems, $eSearchOrderItem);
-                $pager = new Pager();
-                $pager->pageSize = 500;
-                $pager->pageIndex = 1;
-                $searchResults = $elasticSearchPlugin->eSearch->searchUser($searchParams, $pager);
+		$lastCreatedAt = -1;
+		$foundUsers = array();
+	        $lastCreatedAt = -1;
+	        $filter = new UserFilter();
+        	$filter->orderBy = UserOrderBy::CREATED_AT_ASC;
+	        $filter->createdAtGreaterThanOrEqual = $lastCreatedAt;
+	        $filter->isAdminEqual = NullableBoolean::FALSE_VALUE;
+	        $filter->advancedSearch = new MetadataSearchItem();
+	        $filter->advancedSearch->metadataProfileId = $userRoleMetadataProfileId;
+	        $filter->advancedSearch->type = SearchOperatorType::SEARCH_AND;
+	        $filter->advancedSearch->items = [];
+	        $filter->advancedSearch->items[0] = new SearchCondition();
+	        $filter->advancedSearch->items[0]->field = "/*[local-name()='metadata']/*[local-name()='role']";
+	        $filter->advancedSearch->items[0]->value = "*";
+	        $pager = new FilterPager();
+	        $pager->pageSize = 500;
+	        $pager->pageIndex = 1;
+
+   	        $searchResults = $this->client->getUserService()->listAction($filter, $pager);
                 while ($searchResults->totalCount > 0) {
-                    foreach ($searchResults->objects as $searchResult) {
-                        $user = $searchResult->object;
+                    foreach ($searchResults->objects as $user) {
                         $userId = $user->id;
                         $hasRegInfo = isset($user->registrationInfo) && $user->registrationInfo != null && $user->registrationInfo != '';
                         $userProfile = $hasRegInfo ? json_decode($user->registrationInfo) : null;
@@ -199,10 +177,9 @@ class GetUsersUtil implements ILogger
                         }
                         $lastCreatedAt = $user->createdAt;
                     }
-                    $searchParams->searchOperator->searchItems[2]->range->greaterThan = $lastCreatedAt;
-                    usleep(500000);
-                    $searchResults = $elasticSearchPlugin->eSearch->searchUser($searchParams, $pager);
-                    //KalturaApiUtils::presistantApiRequest($this, $elasticSearchPlugin->eSearch, 'searchUser', array($searchParams, $pager), 5);
+                    $filter->createdAtGreaterThanOrEqual = $lastCreatedAt;
+		    usleep(250000);
+		    $searchResults = $this->client->getUserService()->listAction($filter, $pager);
                 }
                 $totalRegisteredUsers = count($foundUsers);
                 print "found total {$totalRegisteredUsers} users.\n";
