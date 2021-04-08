@@ -1,7 +1,7 @@
 {
     "require": {
         "kaltura/api-client-library": "^16.14",
-        "phpoffice/phpspreadsheet": "^1.17",
-        "phpmailer/phpmailer": "^6.3"
+        "box/spout": "^3.2",
+        "phpmailer/phpmailer": "^6.4"
     }
 }
